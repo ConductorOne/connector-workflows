@@ -17,9 +17,20 @@ on:
         required: true
       AC_PROVIDER:
         required: true
+      DATADOG_API_KEY:
+        required: true
 
 jobs:
+  fail_on_purpose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail on purpose
+        run: |
+          echo "This is a test failure"
+          exit 1
+
   goreleaser:
+    needs: [fail_on_purpose]
     runs-on: macos-latest
     steps:
       - name: Checkout caller repo
@@ -76,6 +87,7 @@ jobs:
           AC_PROVIDER: ${{ secrets.AC_PROVIDER }}
 
   goreleaser-docker:
+    needs: [fail_on_purpose]
     permissions:
       id-token: write
       contents: read
@@ -157,3 +169,34 @@ jobs:
           --cli-binary-format raw-in-base64-out \
           "$TMPFILE"
           cat "$TMPFILE"
+
+  notify-failure:
+    needs: [fail_on_purpose, goreleaser, goreleaser-docker, record-release]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Datadog event on failure
+        uses: masci/datadog@v1
+        with:
+          api-key: ${{ secrets.DATADOG_API_KEY }}
+          api-url: https://us3.datadoghq.com/
+          events: |
+            - title: "Baton Connector Release Failed"
+              text: |
+                %%%
+                # Release Failed ${{ github.event.repository.name }}:${{ inputs.tag }}
+                ## Details
+                * **Repository:** `${{ github.event.repository.full_name }}`
+                * **Release Tag:** `${{ inputs.tag }}`
+                * **Workflow:** `baton-connector-release`
+                * **Action Run ID:** `${{ github.run_id }}`
+
+                ## Links
+                [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                %%%
+              alert_type: "error"
+              host: ${{ github.repository_owner }}
+              tags:
+                - "github_repository:${{ github.event.repository.full_name }}"
+                - "github_release_tag:${{ inputs.tag }}"
+                - "github_workflow:baton-connector-release"
